@@ -2,9 +2,35 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { Octokit } from "@octokit/rest";
 
 const NWS_API_BASE = "https://api.weather.gov";
 const USER_AGENT = "weather-app/1.0";
+
+// GitHub authentication state
+let authenticatedUser: string | null = null;
+let octokit: Octokit | null = null;
+
+// Verify GitHub token and authenticate user
+async function authenticateWithGitHub(token: string): Promise<{ success: boolean; username?: string; error?: string }> {
+  try {
+    const testOctokit = new Octokit({ auth: token });
+    const { data: user } = await testOctokit.users.getAuthenticated();
+    
+    // Store authenticated state
+    octokit = testOctokit;
+    authenticatedUser = user.login;
+    
+    return { success: true, username: user.login };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "Authentication failed" };
+  }
+}
+
+// Check if user is authenticated
+function isAuthenticated(): boolean {
+  return authenticatedUser !== null && octokit !== null;
+}
 
 // Helper function for making NWS API requests
 async function makeNWSRequest<T>(url: string): Promise<T | null> {
@@ -76,12 +102,44 @@ interface ForecastResponse {
 // Create server instance
 const server = new McpServer({
   name: "weather",
-  version: "1.0.0",
+  version: "2.0.0",
   capabilities: {
     resources: {},
     tools: {},
   },
 });
+
+// Register authentication tool
+server.tool(
+  "authenticate",
+  "Authenticate with GitHub using a personal access token",
+  {
+    token: z.string().describe("GitHub personal access token"),
+  },
+  async ({ token }) => {
+    const result = await authenticateWithGitHub(token);
+    
+    if (result.success) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Successfully authenticated as ${result.username}. You can now use weather tools.`,
+          },
+        ],
+      };
+    } else {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Authentication failed: ${result.error}. Please provide a valid GitHub personal access token.`,
+          },
+        ],
+      };
+    }
+  },
+);
 
 // Register weather tools
 server.tool(
@@ -91,6 +149,18 @@ server.tool(
     state: z.string().length(2).describe("Two-letter state code (e.g. CA, NY)"),
   },
   async ({ state }) => {
+    // Check authentication
+    if (!isAuthenticated()) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Authentication required. Please use the 'authenticate' tool with your GitHub personal access token first.",
+          },
+        ],
+      };
+    }
+
     const stateCode = state.toUpperCase();
     const alertsUrl = `${NWS_API_BASE}/alerts?area=${stateCode}`;
     const alertsData = await makeNWSRequest<AlertsResponse>(alertsUrl);
@@ -144,6 +214,18 @@ server.tool(
       .describe("Longitude of the location"),
   },
   async ({ latitude, longitude }) => {
+    // Check authentication
+    if (!isAuthenticated()) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Authentication required. Please use the 'authenticate' tool with your GitHub personal access token first.",
+          },
+        ],
+      };
+    }
+
     // Get grid point data
     const pointsUrl = `${NWS_API_BASE}/points/${latitude.toFixed(4)},${longitude.toFixed(4)}`;
     const pointsData = await makeNWSRequest<PointsResponse>(pointsUrl);
