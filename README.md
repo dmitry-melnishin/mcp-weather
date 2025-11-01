@@ -1,11 +1,12 @@
 # Weather MCP Server
 
-A Model Context Protocol (MCP) server that provides weather forecasts and alerts using the US National Weather Service API. **Requires GitHub authentication** to access weather tools.
+A Model Context Protocol (MCP) server that provides weather forecasts and alerts using the Weather Service API. **Features automatic GitHub OAuth authentication via browser**.
 
 ## Features
 
-- **GitHub Authentication**: Secure access using GitHub personal access tokens
-- **Weather Forecasts**: Get detailed weather forecasts for any US location by coordinates
+- **Automatic Browser Authentication**: Seamlessly authenticate via GitHub OAuth in your browser
+- **Persistent Sessions**: Stay authenticated across server restarts
+- **Weather Forecasts**: Get detailed weather forecasts for any location by coordinates
 - **Weather Alerts**: Retrieve active weather alerts by state code
 
 ## Installation
@@ -24,7 +25,11 @@ Add this to your MCP settings file (`.vscode/mcp.json` or global settings):
   "mcpServers": {
     "weather": {
       "command": "npx",
-      "args": ["-y", "@dmitry-melnishin/mcp-weather"]
+      "args": ["-y", "@dmitry-melnishin/mcp-weather"],
+      "env": {
+        "GITHUB_CLIENT_ID": "your_github_oauth_client_id",
+        "GITHUB_CLIENT_SECRET": "your_github_oauth_client_secret"
+      }
     }
   }
 }
@@ -36,7 +41,28 @@ Or if installed globally:
 {
   "mcpServers": {
     "weather": {
-      "command": "mcp-weather"
+      "command": "mcp-weather",
+      "env": {
+        "GITHUB_CLIENT_ID": "your_github_oauth_client_id",
+        "GITHUB_CLIENT_SECRET": "your_github_oauth_client_secret"
+      }
+    }
+  }
+}
+```
+
+Or if installed locally:
+
+```json
+{
+  "weather": {
+    "command": "node",
+    "args": [
+      "c:\\...\\build\\index.js"
+    ],
+    "env": {
+      "GITHUB_CLIENT_ID": "your_github_oauth_client_id",
+      "GITHUB_CLIENT_SECRET": "your_github_oauth_client_secret"
     }
   }
 }
@@ -44,38 +70,41 @@ Or if installed globally:
 
 ## Authentication Setup
 
-Before using the weather tools, you must authenticate with GitHub:
+### 1. Create a GitHub OAuth Application
 
-1. **Create a GitHub Personal Access Token**:
-   - Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-   - Click "Generate new token (classic)"
-   - You don't need to select any scopes - just name it (e.g., "MCP Weather")
-   - Click "Generate token" and copy the token
+1. Go to [GitHub Developer Settings](https://github.com/settings/developers)
+2. Click **"New OAuth App"**
+3. Fill in the application details:
+   - **Application name**: Weather MCP Server (or any name you prefer)
+   - **Homepage URL**: `http://localhost:3000`
+   - **Authorization callback URL**: `http://localhost:3000/callback`
+4. Click **"Register application"**
+5. Copy the **Client ID**
+6. Click **"Generate a new client secret"** and copy the **Client Secret**
 
-2. **Authenticate in MCP**:
-   - Use the `authenticate` tool with your GitHub token
-   - Once authenticated, you can use all weather tools
+### 2. Configure the MCP Server
 
-**Example authentication:**
+Add the Client ID and Client Secret to your MCP configuration (see above) or create a `.env` file in the installation directory:
+
+```bash
+GITHUB_CLIENT_ID=your_client_id_here
+GITHUB_CLIENT_SECRET=your_client_secret_here
 ```
-Tool: authenticate
-Parameters: { "token": "ghp_your_github_token_here" }
-```
+
+### 3. First Use
+
+When you first use any weather tool:
+1. Your browser will automatically open to GitHub's authorization page
+2. Click **"Authorize"** to grant access
+3. The browser will show a success message
+4. Return to your application - you're now authenticated!
+
+**Your authentication persists** across server restarts, so you only need to authenticate once.
 
 ## Available Tools
 
-### authenticate
-Authenticate with GitHub using a personal access token.
-
-**Parameters:**
-- `token` (string): GitHub personal access token
-
-**Returns:** Success message with authenticated username or error message.
-
-**Note:** You must authenticate before using any weather tools.
-
 ### get_forecast
-Get weather forecast for a location. **Requires authentication.**
+Get weather forecast for a location. **Automatically handles authentication.**
 
 **Parameters:**
 - `latitude` (number): Latitude of the location (-90 to 90)
@@ -87,7 +116,7 @@ Get forecast for latitude 40.7128, longitude -74.0060
 ```
 
 ### get_alerts
-Get weather alerts for a US state. **Requires authentication.**
+Get weather alerts. **Automatically handles authentication.**
 
 **Parameters:**
 - `state` (string): Two-letter state code (e.g., "CA", "NY")
@@ -99,10 +128,24 @@ Get weather alerts for CA
 
 ## Security Notes
 
-- Your GitHub token is only stored in memory during the server session
-- The token is never logged or persisted to disk
-- No specific GitHub permissions/scopes are required
+- Your GitHub token is stored securely in local persistent storage
+- Authentication persists across server restarts
+- The OAuth flow uses standard GitHub OAuth with local callback
+- No GitHub permissions/scopes are required
 - The token is only used to verify your identity with GitHub
+
+## Troubleshooting
+
+**Browser doesn't open automatically?**
+- Check the terminal output for the authorization URL and open it manually
+
+**Authentication fails?**
+- Verify your GitHub OAuth app Client ID and Client Secret are correct
+- Ensure the callback URL is set to `http://localhost:3000/callback`
+- Check that port 3000 is not already in use
+
+**Token expired?**
+- Simply use any weather tool again - you'll be prompted to re-authenticate
 
 ## Development
 

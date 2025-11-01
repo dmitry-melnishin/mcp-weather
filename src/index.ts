@@ -3,13 +3,97 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { Octokit } from "@octokit/rest";
+import express from "express";
+import open from "open";
+import storage from "node-persist";
+import * as dotenv from "dotenv";
+import { createServer } from "http";
+
+// Load environment variables
+dotenv.config();
 
 const NWS_API_BASE = "https://api.weather.gov";
 const USER_AGENT = "weather-app/1.0";
+const REDIRECT_URI = "http://localhost:3000/callback";
+const PORT = 3000;
+
+// GitHub OAuth configuration
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 
 // GitHub authentication state
 let authenticatedUser: string | null = null;
 let octokit: Octokit | null = null;
+let authServer: ReturnType<typeof createServer> | null = null;
+
+// Initialize persistent storage
+await storage.init({
+  dir: ".node-persist/weather-mcp", // C:\Users\Name_SecondName\.node-persist\weather-mcp
+});
+
+// Exchange OAuth code for access token
+async function exchangeCodeForToken(code: string): Promise<string | null> {
+  try {
+    const response = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        client_secret: GITHUB_CLIENT_SECRET,
+        code,
+      }),
+    });
+
+    const data = await response.json();
+    return data.access_token || null;
+  } catch (error) {
+    console.error("Error exchanging code for token:", error);
+    return null;
+  }
+}
+
+// Start OAuth flow by opening browser
+async function startOAuthFlow(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const app = express();
+    
+    app.get("/callback", async (req, res) => {
+      const code = req.query.code as string;
+      
+      if (!code) {
+        res.send("❌ Authentication failed: No code received");
+        resolve(null);
+        return;
+      }
+
+      const token = await exchangeCodeForToken(code);
+      
+      if (token) {
+        res.send("✅ Authentication successful! You can close this window and return to your application.");
+        resolve(token);
+      } else {
+        res.send("❌ Authentication failed: Could not exchange code for token");
+        resolve(null);
+      }
+
+      // Close server after handling callback
+      setTimeout(() => {
+        authServer?.close();
+        authServer = null;
+      }, 1000);
+    });
+
+    authServer = app.listen(PORT, () => {
+      const authUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=`;
+      console.error(`Opening browser for GitHub authentication...`);
+      console.error(`If browser doesn't open, visit: ${authUrl}`);
+      open(authUrl);
+    });
+  });
+}
 
 // Verify GitHub token and authenticate user
 async function authenticateWithGitHub(token: string): Promise<{ success: boolean; username?: string; error?: string }> {
@@ -21,10 +105,64 @@ async function authenticateWithGitHub(token: string): Promise<{ success: boolean
     octokit = testOctokit;
     authenticatedUser = user.login;
     
+    // Persist token for future sessions
+    await storage.setItem("github_token", token);
+    await storage.setItem("github_user", user.login);
+    
     return { success: true, username: user.login };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : "Authentication failed" };
   }
+}
+
+// Try to restore authentication from stored token
+async function restoreAuthentication(): Promise<boolean> {
+  const token = await storage.getItem("github_token");
+  const username = await storage.getItem("github_user");
+  
+  if (!token || !username) {
+    return false;
+  }
+
+  const result = await authenticateWithGitHub(token);
+  if (result.success) {
+    console.error(`Restored authentication for user: ${username}`);
+    return true;
+  }
+  
+  // Token is invalid, clear storage
+  await storage.clear();
+  return false;
+}
+
+// Ensure user is authenticated (restore or start OAuth)
+async function ensureAuthenticated(): Promise<boolean> {
+  if (isAuthenticated()) {
+    return true;
+  }
+
+  // Try to restore from storage
+  const restored = await restoreAuthentication();
+  if (restored) {
+    return true;
+  }
+
+  // Check if OAuth is configured
+  if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
+    console.error("GitHub OAuth not configured. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables.");
+    return false;
+  }
+
+  // Start OAuth flow
+  console.error("Authentication required. Starting OAuth flow...");
+  const token = await startOAuthFlow();
+  
+  if (!token) {
+    return false;
+  }
+
+  const result = await authenticateWithGitHub(token);
+  return result.success;
 }
 
 // Check if user is authenticated
@@ -149,13 +287,14 @@ server.tool(
     state: z.string().length(2).describe("Two-letter state code (e.g. CA, NY)"),
   },
   async ({ state }) => {
-    // Check authentication
-    if (!isAuthenticated()) {
+    // Ensure authentication
+    const authenticated = await ensureAuthenticated();
+    if (!authenticated) {
       return {
         content: [
           {
             type: "text",
-            text: "Authentication required. Please use the 'authenticate' tool with your GitHub personal access token first.",
+            text: "Authentication failed. Please ensure GitHub OAuth is configured correctly.",
           },
         ],
       };
@@ -214,13 +353,14 @@ server.tool(
       .describe("Longitude of the location"),
   },
   async ({ latitude, longitude }) => {
-    // Check authentication
-    if (!isAuthenticated()) {
+    // Ensure authentication
+    const authenticated = await ensureAuthenticated();
+    if (!authenticated) {
       return {
         content: [
           {
             type: "text",
-            text: "Authentication required. Please use the 'authenticate' tool with your GitHub personal access token first.",
+            text: "Authentication failed. Please ensure GitHub OAuth is configured correctly.",
           },
         ],
       };
@@ -303,6 +443,9 @@ server.tool(
 );
 
 async function main() {
+  // Try to restore authentication on startup
+  await restoreAuthentication();
+  
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Weather MCP Server running on stdio");

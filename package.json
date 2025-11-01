@@ -31,10 +31,16 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.2",
     "@octokit/rest": "^22.0.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "node-persist": "^4.0.4",
+    "open": "^10.2.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@types/express": "^5.0.4",
     "@types/node": "^24.9.1",
+    "@types/node-persist": "^3.1.8",
     "typescript": "^5.9.3"
   },
   "engines": {
